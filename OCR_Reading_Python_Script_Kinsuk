@@ -1,0 +1,216 @@
+# OCR reading and information extraction code for insurance claims in python  
+
+## pip install the relevant packages: 
+# pip install pytesseract
+# pip install tabula-py
+# pip install tabulate
+# pip install tesseract-ocr
+# pip install opencv-python
+# pip install pdf2image
+# pip install poppler-utils
+# sudo apt-get install poppler-utils
+# con da install -c conda-forge poppler
+# pip install poppler-utils
+# !pip install tabula-py
+# !pip install tabulate
+# !pip install ghostscript
+# ! pip install camelot-py
+
+
+# Import the os module and set the path of the working directory :
+import os
+
+# Importing Libraries
+import pandas as pd
+import numpy as np
+import datetime as dt
+from datetime import date
+from matplotlib import pyplot as plt
+import seaborn as sns
+import cv2 
+import pytesseract
+
+# Ignore Warnings
+import warnings
+warnings.filterwarnings('ignore')
+
+# Change the current working directory
+os.chdir(r'C:\Users\kghatak003\Desktop\Work\OCR_PoC')
+poppler_path = r"C:\Users\kghatak003\Desktop\Work\OCR_PoC\bin\poppler-23.01.0\Library\bin"
+pytesseract.pytesseract.tesseract_cmd = r"C:\Users\kghatak003\Desktop\Work\OCR_PoC\tesseract-ocr-w64-setup-5.3.1.20230401.exe"
+
+from PIL import EpsImagePlugin
+EpsImagePlugin.gs_windows_binary =  r'C:\Program Files\gs\gs10.01.1\bin\gswin64c'
+# im = Image.open('myimage.eps')
+# im.save('myimage.png')
+
+## Read the pdf file page by page and convert all the pages to individual jpg files: 
+
+
+# convert PDF to image then to an array of jpg files ready for opencv processing: 
+from pdf2image import convert_from_path
+ 
+ 
+# Store Pdf with convert_from_path function
+
+images = convert_from_path('New Pip Arb Filing Form.pdf', poppler_path=poppler_path  )
+ 
+for i in range(len(images)):
+   
+      # Save pages as images in the pdf
+    images[i].save('page'+ str(i) +'.jpg', 'JPEG')
+
+## Preprocess the images and extract the text : 
+## Preprocess the images:
+
+import cv2
+import numpy as np
+import pytesseract
+import re
+
+img = cv2.imread('page0.jpg')
+
+# get grayscale image
+def get_grayscale(image):
+    return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+# noise removal
+def remove_noise(image):
+    return cv2.medianBlur(image,5)
+ 
+#thresholding
+def thresholding(image):
+    return cv2.threshold(image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+
+#dilation
+def dilate(image):
+    kernel = np.ones((5,5),np.uint8)
+    return cv2.dilate(image, kernel, iterations = 1)
+    
+#erosion
+def erode(image):
+    kernel = np.ones((5,5),np.uint8)
+    return cv2.erode(image, kernel, iterations = 1)
+
+#opening - erosion followed by dilation
+def opening(image):
+    kernel = np.ones((5,5),np.uint8)
+    return cv2.morphologyEx(image, cv2.MORPH_OPEN, kernel)
+
+#canny edge detection
+def canny(image):
+    return cv2.Canny(image, 100, 200)
+
+
+def image_preprocess(image):
+    
+    greyscale_img=get_grayscale(image)
+    
+    removed_noise_img=remove_noise(greyscale_img)
+    
+    threshold_img=thresholding(removed_noise_img)
+    
+    dialte_img=dilate(threshold_img)
+    
+    erode_img=erode(dialte_img)
+    
+    opening_img=opening(erode_img)
+    
+    canny_img=canny(opening_img)
+    
+    return canny_img
+
+img_preprocessed= image_preprocess(img)
+
+
+
+# Adding custom options and extract the text 
+custom_config = r'--oem 3 --psm 6'
+pytesseract.pytesseract.tesseract_cmd = r"C:\Users\kghatak003\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
+text=pytesseract.image_to_string(img)
+# text = text.replace("\n", " ")
+
+## Optional : Removing special characters from the text corpus 
+def clean(text):
+    return re.sub('[^A-Za-z0-9" "]+', ' ', text)
+
+clean_text=clean(text)
+
+clean_text
+
+## Use RegEx to extract specific infomration from the text corpus : 
+# Extract specific Applicant information from the text using Regex and then convert the information into a table : 
+
+import re
+
+# Define regular expressions for each piece of information
+file_number_regex = r'File Number:\s*(\d+)'
+date_of_loss_regex = r'Date of Loss:\s*(\d{2}/\d{2}/\d{4})'
+company_code_regex = r'Company Code:\s*(\d{5})'
+rep_name_regex= "Representative:\s* ([A-Z]+\s[A-Z]+\s)"  
+date_of_filing_regex = r'(?:Date of Filing|Filing Date|Claim Booking date):\s*(\d{2}/\d{2}/\d{4})'
+insured_party_regex = r'Insured:\s*([\b[A-Z]+(?:\s+[A-Z]+)*\b)' 
+claim_amount_regex= r'Claim Amount Sought:\s*([\$ ]+?(\d+([,\.\d]+)?))'
+representative_address_regex = r"Representative Address: ([A-Za-z0-9 ,]+)"
+representative_phone_regex= r"Representative Phone:\s*(\d{3}-\d{3}-\d{4})"
+injured_party_regex=r"Injured Party:\s* ([A-Z]+\s[A-Z]+\s[A-Z]+\s)" 
+incident_location_regex=r"Incident Location:\s* ([A-Za-z0-9 ,]+\s)" 
+toal_amt_paid_regex=r'Total Itemized Company-Paid Damages:\s*([\$ ]+?(\d+([,\.\d]+)?))'
+
+
+
+# Define a function to extract information from the corpus
+def extract_information(corpus):
+    file_number = re.search(file_number_regex, corpus).group(1)
+    date_of_loss = re.search(date_of_loss_regex, corpus).group(1)
+    company_code = re.search(company_code_regex, corpus).group(1)
+    representative_name=re.search(rep_name_regex, corpus).group(1)
+    date_of_filing = re.search(date_of_filing_regex, corpus).group(1)
+    insured_party = re.search(insured_party_regex, corpus).group(1)
+    claim_amount=re.search(claim_amount_regex, corpus).group(1)
+    representative_address=re.search(representative_address_regex, corpus).group(1)
+    representative_phone= re.search(representative_phone_regex, corpus).group(1)
+    injured_party= re.search(injured_party_regex, corpus).group(1)
+    incident_location= re.search(incident_location_regex, corpus).group(1)
+    toal_amt_paid= re.search(toal_amt_paid_regex, corpus).group(1)
+    
+   
+    
+    # Return a dictionary with the extracted information
+    return {
+        'File Number': file_number,
+        'Date of Loss': date_of_loss,
+        'Company Code': company_code,
+        'Representative Name' :representative_name,
+        'Date of Filing': date_of_filing,
+        'Insured Party': insured_party,
+        'Claim Amount': claim_amount,
+        'Representative Address':representative_address,
+        'Representative Phone':representative_phone,
+        'Injured Party' : injured_party,
+        'Incident Location' : incident_location,
+        'Total amount Paid': toal_amt_paid
+    }
+
+
+
+dict_1=extract_information(text)
+info_df=pd.DataFrame(dict_1.items())
+info_df.columns=['Applicant Information','Value']
+info_df
+
+
+## Let us now use camelot package to extract tables directly from the PDF reports 
+import camelot
+tables = camelot.read_pdf('New Pip Arb Filing Form.pdf', pages='all',flavor='stream' ,edge_tol=600)
+tables
+for i in range(tables.n):
+    print(tables[i].parsing_report)
+    display(tables[i].df)
+
+
+# !pip install camelot-py[plot]
+camelot.plot(tables[0], kind='text').show()
+camelot.plot(tables[0], kind='grid').show()
+camelot.plot(tables[1], kind='contour').show()
+tables[1]._bbox
