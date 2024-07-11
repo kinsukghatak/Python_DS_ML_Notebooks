@@ -1,0 +1,1582 @@
+
+
+# Import the os module
+import os
+
+# Importing Libraries
+import pandas as pd
+import numpy as np
+import datetime as dt
+from datetime import date
+from matplotlib import pyplot as plt
+import seaborn as sns
+
+# Ignore Warnings
+import warnings
+warnings.filterwarnings('ignore')
+
+# Change the current working directory
+os.chdir(r'C:\Users\kghatak003\Desktop\Work\L2Cash_POC\POC Development\Model 2\Bookings Data')
+
+# Print the current working directory
+print("Current working directory: {0}".format(os.getcwd()))
+
+
+# ## Read and process the Bookings data : 
+
+# In[7]:
+
+
+df_2016=pd.read_excel("2016_Calendar_Year_Bookings.xlsb",engine='pyxlsb',sheet_name="Sheet1")
+df_2017=pd.read_excel("2017_Calendar_Year_Bookings.xlsb",engine='pyxlsb',sheet_name="Sheet1")
+df_2018=pd.read_excel("2018_Calendar_Year_Bookings.xlsb",engine='pyxlsb',sheet_name="Sheet1")
+
+# stack the three DataFrames
+bookings_df=pd.concat([df_2016, df_2017,df_2018], ignore_index=True, axis=0)
+
+
+# In[8]:
+
+
+# Creating a copy of the dataframe
+df = bookings_df.copy()
+
+# Selecting the relevant columns for our analysis
+select_relevant_columns = ['YR',
+ 'MNTH',
+ 'BILL_TO_CR_ID',                         
+ 'END_USER_CR_ID',
+ 'END_USER_COUNTRY_NAME',
+ 'SHIP_TO_CR_ID',                          
+ 'PROD_NUM',
+ 'PR_EXTERNAL_SEGMENT',
+ 'PR_LEVEL2',
+ 'PR_COMPANY',                 
+ 'AMT']
+
+# Filtering the dataset only for the relevant columns we have selected
+df = df[select_relevant_columns]
+
+
+# Forming a function to create a Date column from the year and the month
+def create_date(year, month, day=1):
+    try:
+        return dt.date(year, month, day)
+    except:
+        np.nan
+        
+        # Creating the Date column
+df['Date'] = np.vectorize(create_date)(df["YR"], df["MNTH"])
+df['Date'] = pd.to_datetime(df['Date'])
+
+# Renaming Columns
+df.columns = ['Year', 'Month', 'Bill_to_CR_ID','End_Customer_ID', 'Country' , 'Ship_to_CR_ID', 'Product_Code', 'PR_External_Segment' , 'PR_Level2', 'PR_Company', 'Amount', 'Date']
+
+
+df["Fiscal Year"]=df["Date"].dt.to_period('Q-APR').dt.qyear.apply(lambda x:str(x-1) + "-" + str(x))
+
+
+# Select columns as per the nature of the column required
+categorical_columns = ['Product_Code','End_Customer_ID','Bill_to_CR_ID','Ship_to_CR_ID']
+numerical_columns = ["Amount"]
+integer_columns = ['Year', 'Month'] #  Not required if we have Date column present in the dataset
+date_columns = ["Date"]
+
+# Converting categorical columns to string data types
+for column in categorical_columns:
+    df[column] = df[column].astype(str).mask(df[column].isnull(), np.NaN)
+    
+    # Converting numerical columns to float data types
+for column in numerical_columns:
+    df[column] = df[column].astype(float).mask(df[column].isnull(), np.NaN)
+    
+    # # Converting integer columns to integer data types
+for column in integer_columns:
+    df[column] = df[column].astype(int).mask(df[column].isnull(), np.NaN)
+    
+    #Filtering the data only for United States
+US_Bookings= df[df['Country']=="United States"]
+
+# Removing records with Null Values
+# df = df.dropna()
+US_Bookings=US_Bookings.dropna()
+
+
+
+# In[9]:
+
+
+us_bookings_new=US_Bookings[(US_Bookings['Date'] >= '2017-01-01') & (US_Bookings['Date'] <= '2017-03-01')]
+us_bookings_new.head()
+
+us_bookings_new.groupby('End_Customer_ID').agg({'Amount':'count'}).value_counts(normalize=True)
+
+
+# In[10]:
+
+
+
+#Offsetting and filtering the US Bookings
+US_Bookings = US_Bookings.sort_values(by = ['End_Customer_ID', 'Product_Code', 'Amount'], ascending = [True, True, False])
+US_Bookings.reset_index(drop = True)
+
+idx = [True]
+
+for i in range(1, len(US_Bookings)):
+    
+    # IF 1: Check if the 2 IDs are matching (Customer ID and Product ID)
+    if (US_Bookings['End_Customer_ID'].iloc[i-1] == US_Bookings["End_Customer_ID"].iloc[i]) & (US_Bookings['Product_Code'].iloc[i-1] == US_Bookings['Product_Code'].iloc[i]):
+        
+        # IF 2: Check if previous amount == -(current amount). ie., 191 == -(-191)?
+            # If yes, pop the previous one, and mark both the previous one & the current one as False
+        if US_Bookings['Amount'].iloc[i-1] == -(US_Bookings['Amount'].iloc[i]):
+            idx.pop()
+            idx.append(False)
+            idx.append(False)
+            
+        # If the previous amount != -(current amount), then mark the current one as True
+        else:
+            idx.append(True)
+            
+    # If the 2 IDs are NOT matching, then retain those rows
+    else:
+        idx.append(True)
+        
+
+    
+US_Bookings=US_Bookings[idx].reset_index(drop = True)
+
+#Removing all negative "Amount" values
+US_Bookings= US_Bookings[US_Bookings['Amount'] > 0]
+
+US_Bookings.describe()
+
+
+# ## Churn flag creation:
+
+# In[11]:
+
+
+#Filtering only for April 2016 to March 2017
+US_Bookings_Apr2016_Mar2017=US_Bookings[(US_Bookings['Date'] >= '2016-04-01') & (US_Bookings['Date'] <= '2017-03-01')]
+#Filtering only for April 2017 to March 2018
+US_Bookings_Apr2017_Mar2018=US_Bookings[(US_Bookings['Date'] >= '2017-04-01') & (US_Bookings['Date'] <= '2018-03-01')]
+
+
+# In[12]:
+
+
+#US_Bookings_Apr2016_Mar2017
+df_Apr2016_Mar2017=US_Bookings_Apr2016_Mar2017[['End_Customer_ID', 'Amount']]
+df_Apr2016_Mar2017=df_Apr2016_Mar2017.groupby('End_Customer_ID').agg({'Amount':'sum'}) 
+
+
+#US_Bookings_Apr2017_Mar2018
+df_Apr2017_Mar2018=US_Bookings_Apr2017_Mar2018[['End_Customer_ID', 'Amount']]
+df_Apr2017_Mar2018=df_Apr2017_Mar2018.groupby('End_Customer_ID').agg({'Amount':'sum'}) 
+
+
+#Joining US_Bookings_Apr2016_Mar2017 with US_Bookings_Apr2017_Mar2018 to find common customers (non -churn/ repeaters)
+Join_df1=pd.merge(df_Apr2016_Mar2017, df_Apr2017_Mar2018, how='inner', left_on=["End_Customer_ID"],right_on=["End_Customer_ID"])
+
+#Creating a new column called "Churn Flag" for all the non-churn customers which will take on the value "0"
+Join_df1_Churn_Flag=Join_df1["Churn Flag"]=0
+
+
+#Joining Join_df1 with df_Apr2016_Mar2017 
+Churn_flag=pd.merge(df_Apr2016_Mar2017,Join_df1, on= "End_Customer_ID", how="left")
+
+#Converting all null values within the column, "Churn Flag" into 1; All customers who are flagged as 1 are "churn" customers
+Churn_flag['Churn Flag'] = Churn_flag['Churn Flag'].fillna(1)
+Churn_flag=Churn_flag.drop(["Amount_x"], axis=1)
+
+print(Churn_flag["Churn Flag"].value_counts())
+
+#Renaming the columns of the dataframe
+Churn_flag.columns = ['Amount_Apr2016-Mar2017', 'Amount_Apr2017-Mar2018', 'Churn Flag']
+Churn_flag=Churn_flag.reset_index()
+Churn_flag_01=Churn_flag.drop(["Amount_Apr2016-Mar2017", "Amount_Apr2017-Mar2018"], axis=1)
+Churn_flag_01
+
+
+# In[ ]:
+
+
+
+df_Apr2016_Mar2017=df_Apr2016_Mar2017.groupby('End_Customer_ID').agg({'Amount':'sum'}) 
+
+df_Apr2017_Mar2018=df_Apr2017_Mar2018.groupby('End_Customer_ID').agg({'Amount':'sum'}) 
+
+Join_df1=pd.merge(df_Apr2016_Mar2017, df_Apr2017_Mar2018, how='inner', left_on=["End_Customer_ID"],
+                  right_on=["End_Customer_ID"])
+
+Join_df1["Churn Flag"]=0
+
+Churn_flag=pd.merge(df_Apr2016_Mar2017,Join_df1, on= "End_Customer_ID", how="left")
+
+Churn_flag['Churn Flag'] = Churn_flag['Churn Flag'].fillna(1)
+
+print(Churn_flag["Churn Flag"].value_counts())
+
+
+# # Upsell/Downsell Analysis
+
+# In[13]:
+
+
+
+Non_churn1=Churn_flag.copy()
+#Filtering only for non-churn customers
+Non_churn1=Non_churn1[(Non_churn1['Churn Flag']==0)]
+
+#Creating a column called, "Difference": Amount in 2017-2018 - Amount in 2016 - 2017
+Non_churn1["Difference"]=Non_churn1["Amount_Apr2017-Mar2018"] - Non_churn1["Amount_Apr2016-Mar2017"]
+
+#Creating a Histogram to check the distribution of values in the "Difference" column
+figure, axis = plt.subplots(figsize = (8, 3))
+axis.hist(Non_churn1["Difference"], bins = range(-1000, 1000, 100))
+plt.show()
+
+#Calculating the Difference %
+Non_churn1["Difference %"]=(Non_churn1["Amount_Apr2017-Mar2018"] - Non_churn1["Amount_Apr2016-Mar2017"])/Non_churn1["Amount_Apr2016-Mar2017"]
+
+Non_churn1["Upsell/Downsell Flag"]=np.where(Non_churn1["Difference %"]>0.05, 1, np.where(Non_churn1["Difference %"]==0.00, 0,-1))
+
+Non_churn1["Upsell/Downsell Flag"].value_counts()
+
+display(Non_churn1)
+
+
+# In[14]:
+
+
+US_Bookings_Apr2016_Mar2017_churn=US_Bookings_Apr2016_Mar2017.merge(Churn_flag_01,on='End_Customer_ID',how='left')
+
+US_Bookings_Apr2016_Mar2017_churn=US_Bookings_Apr2016_Mar2017_churn.merge(Non_churn1[['End_Customer_ID','Upsell/Downsell Flag']],on='End_Customer_ID',how='left')
+
+US_Bookings_Apr2016_Mar2017_churn['churn_up_downsell']=US_Bookings_Apr2016_Mar2017_churn['Upsell/Downsell Flag']
+
+US_Bookings_Apr2016_Mar2017_churn['churn_up_downsell']=US_Bookings_Apr2016_Mar2017_churn['Upsell/Downsell Flag'].fillna(2)
+
+US_Bookings_Apr2016_Mar2017_churn['churn_up_downsell'].value_counts()
+
+
+# In[15]:
+
+
+# ## Read the final development dataset created based on the bookings data. The data also contaions the churn flags.
+
+# df_churn_apr16_mar17=pd.read_csv('df_churn_apr16_mar17.csv')
+# display(df_churn_apr16_mar17.head())
+# df_churn_apr16_mar17.shape
+
+
+# ### Assigning customer risk score based on churn at product sub segment level: 
+
+# In[16]:
+
+
+##Churn rate analysis w.r.t PR Level2 (Product Level 2): 
+
+df_churnrate_pr_level=US_Bookings_Apr2016_Mar2017_churn[['PR_Level2','Churn Flag','End_Customer_ID']].groupby('PR_Level2').agg({'End_Customer_ID':'count','Churn Flag':'sum'})
+
+df_churnrate_pr_level.rename(columns = {'End_Customer_ID':'Count' , 'Churn Flag':'Total Churn'}, inplace = True)
+
+df_churnrate_pr_level['churn_rate'] = (df_churnrate_pr_level['Total Churn'] / df_churnrate_pr_level['Count'] * 100.0)
+
+df_churnrate_pr_level2=df_churnrate_pr_level.sort_values('churn_rate',ascending=False).reset_index().copy()
+
+display(df_churnrate_pr_level2.describe([.2,0.25,.4,.5,.6,.7,0.75,.8,0.9,0.99]))
+
+df_churnrate_pr_level2['churn_rate'].hist()
+
+df_churnrate_pr_level2['subcat_churn_level']=df_churnrate_pr_level2['churn_rate'].apply(lambda x: "low" if x < 32.16 else ("Medium" if x <48.63 else "High"))
+
+
+
+fig = plt.figure(figsize = (15, 10))
+ 
+# creating the bar plot
+plt.bar(df_churnrate_pr_level2['PR_Level2'], df_churnrate_pr_level2['churn_rate'], color ='maroon',width = 0.4)
+
+plt.xlabel("PR Levels")
+plt.ylabel("Churn Rate in 2016-17")
+plt.title("Churn Rate analysis w.r.t PR Level2")
+plt.show()
+
+print(df_churnrate_pr_level2['subcat_churn_level'].value_counts())
+
+display(df_churnrate_pr_level2.head(10))
+
+
+                                                                                                
+
+
+# In[17]:
+
+
+df_churn_apr16_mar17=US_Bookings_Apr2016_Mar2017_churn.merge(df_churnrate_pr_level2[['PR_Level2','subcat_churn_level']],on='PR_Level2',how='left')
+display(df_churn_apr16_mar17.head())
+df_churn_apr16_mar17.shape
+
+
+# In[18]:
+
+
+df_churn_apr16_mar17['subcat_churn_level'].value_counts(normalize=True)
+
+
+# In[19]:
+
+
+df_PR_level2=df_churn_apr16_mar17.groupby('End_Customer_ID')['subcat_churn_level'].apply(lambda x: x[x=='High'].count()/x.count()).rename('risk_prob').reset_index()
+
+
+df_PR_level2.sort_values(by='risk_prob',ascending=True).head()
+
+
+# In[20]:
+
+
+# df_PR_level2[df_PR_level2['End_Customer_ID']==737372081.0]
+df_PR_level2['risk_prob'].hist()
+
+
+# ### Analysis of PR Company with respect to churn rate and then assigning customer risk score: 
+
+# In[21]:
+
+
+##Churn rate analysis w.r.t PR Level2 (Product Level 2): 
+
+df_churnrate_PR_Company=US_Bookings_Apr2016_Mar2017_churn[['PR_Company','Churn Flag','End_Customer_ID']].groupby('PR_Company').agg({'End_Customer_ID':'count','Churn Flag':'sum'})
+
+df_churnrate_PR_Company.rename(columns = {'End_Customer_ID':'Count' , 'Churn Flag':'Total Churn'}, inplace = True)
+
+df_churnrate_PR_Company['churn_rate'] = (df_churnrate_PR_Company['Total Churn'] / df_churnrate_PR_Company['Count'] * 100.0)
+
+df_churnrate_PR_Company2=df_churnrate_PR_Company.sort_values('churn_rate',ascending=False).reset_index().copy()
+
+
+
+display(df_churnrate_PR_Company2.describe())
+
+df_churnrate_PR_Company2['churn_rate'].hist()
+
+df_churnrate_PR_Company2['PR_Company_churn_level']=df_churnrate_PR_Company2['churn_rate'].apply(lambda x: "low" if x < 40 else ("Medium" if x <60 else "High"))
+
+
+
+fig = plt.figure(figsize = (15, 10))
+ 
+# creating the bar plot
+plt.bar(df_churnrate_PR_Company2['PR_Company'], df_churnrate_PR_Company2['churn_rate'], color ='maroon',width = 0.4)
+
+plt.xlabel("PR_Company")
+plt.ylabel("Churn Rate in 2016-17")
+plt.title("Churn Rate analysis w.r.t PR_Company")
+plt.show()
+
+print(df_churnrate_PR_Company2['PR_Company_churn_level'].value_counts())
+
+display(df_churnrate_PR_Company2.head(10))
+
+
+                                                                                                
+
+
+# In[22]:
+
+
+df_churn_apr16_mar17=US_Bookings_Apr2016_Mar2017_churn.merge(df_churnrate_PR_Company2[['PR_Company','PR_Company_churn_level']],on='PR_Company',how='left')
+display(df_churn_apr16_mar17.head())
+df_churn_apr16_mar17.shape
+
+
+# In[23]:
+
+
+df_churn_apr16_mar17['PR_Company_churn_level'].value_counts(normalize=True)
+
+
+# In[24]:
+
+
+df_pr_company=df_churn_apr16_mar17.groupby('End_Customer_ID')['PR_Company_churn_level'].apply(lambda x: x[x=='High'].count()/x.count()).rename('pr_company_risk_prob').reset_index()
+
+df_pr_company.head()
+
+print(df_pr_company['pr_company_risk_prob'].value_counts())
+
+print(df_pr_company['pr_company_risk_prob'].hist())
+# df.groupby('key1')['key2'].apply(lambda x: x[x == 'one'].count())
+
+
+# In[ ]:
+
+
+
+
+
+# ## Frequency of purchase and pruchase date gap variable creation: 
+
+# In[25]:
+
+
+## Creating the frequency of purchase variable :
+
+df_freq_booking=  US_Bookings_Apr2016_Mar2017_churn.groupby('End_Customer_ID').agg({'Date':'nunique'}).sort_values(by='Date',ascending=False).rename(columns={'Date':'Frequency_of_Booking'}).reset_index()
+
+df_freq_booking
+
+
+# In[26]:
+
+
+
+##Creating the purchase gap period variable: 
+
+US_Bookings_Apr2016_Mar2017_churn['Date'] = US_Bookings_Apr2016_Mar2017_churn['Date'].astype('datetime64[ns]')
+
+df_booking_gap=US_Bookings_Apr2016_Mar2017_churn.groupby('End_Customer_ID').agg(latest_date=('Date', 'max'),first_date=('Date', 'min'))
+df_booking_gap['max_purchase_gap_period']=df_booking_gap['latest_date']-df_booking_gap['first_date']
+df_booking_gap=df_booking_gap.sort_values(by='max_purchase_gap_period',ascending=False).reset_index()
+df_booking_gap
+
+
+# In[27]:
+
+
+df_booking_gap['max_purchase_gap_period'].describe([.1,.2,.5,.6,.7,.75,.8,.85,.9,.95,.97,.99])
+
+##analyse churn rate for 0 days and then 0 , 0 to 30 , 30 to 90 and above 90 (4 buckets)
+
+
+# In[28]:
+
+
+## Merging all bookings varioables :
+
+
+# In[29]:
+
+
+#Creating the features
+df1_Apr2016_Mar2017=US_Bookings_Apr2016_Mar2017_churn.copy()
+
+
+
+df1 = df1_Apr2016_Mar2017.groupby(['End_Customer_ID']).agg({'Amount':['sum','count','mean']})
+df1['Unique_Products_Count'] = df1_Apr2016_Mar2017.groupby(['End_Customer_ID'])['Product_Code'].nunique()
+df1["Symantec_Flag"] = df1_Apr2016_Mar2017.groupby(["End_Customer_ID"])["PR_Company"].apply(lambda x: 1 if "Symantec" in x.values else 0)
+top_product_df_Apr2016_Mar2017 = df1_Apr2016_Mar2017[df1_Apr2016_Mar2017["PR_Level2"]=="Endpoint Security"]
+df1["ES_Amount"] = top_product_df_Apr2016_Mar2017.groupby(["End_Customer_ID"])["Amount"].sum()
+df1.columns = ["Total_Amount", 'Total_Bookings', 'Average_Ticket_Size', 'Unique_Products_Count', 'Symantec_Flag', 'ES_Amount']
+df1["ES_Amount_Percentage"] = df1["ES_Amount"]/df1["Total_Amount"]*100
+df1["Customer_Size"] = df1["Total_Bookings"].apply(lambda x: "Small" if x < 2 else ("Medium" if x <5 else "Large"))
+df1.reset_index(inplace=True)
+df1 = df1.fillna(0)
+df1
+
+
+# In[ ]:
+
+
+
+
+
+# In[30]:
+
+
+## Merge : PR_Level2 Risk scores: 
+
+df_pr_lev2_merged= df1.merge(df_PR_level2,on='End_Customer_ID',how='left')
+df_pr_lev2_merged.head()
+
+## Merge : Frequency of booking: 
+
+df_freq_purchase_merged= df_pr_lev2_merged.merge(df_freq_booking,on='End_Customer_ID',how='left')
+df_freq_purchase_merged.head()
+
+## Merge : Gap of purchase : 
+
+# df_freq_purchase_merged['End_Customer_ID'] = df_freq_purchase_merged['End_Customer_ID'].astype(float)
+df_gap_purchase_merged= df_freq_purchase_merged.merge(df_booking_gap[['End_Customer_ID','max_purchase_gap_period']],on='End_Customer_ID',how='left')
+df_gap_purchase_merged
+
+# ## Merge : Churn flag : 
+df_churn_flag=US_Bookings_Apr2016_Mar2017_churn[['End_Customer_ID','Churn Flag']].drop_duplicates()
+# df_churn_flag['End_Customer_ID'] = df_churn_flag['End_Customer_ID'].astype(float)
+df_merged_churn_flag=df_gap_purchase_merged.merge(df_churn_flag,on='End_Customer_ID',how='left')
+df_merged_churn_flag
+
+
+# ## Merge : Upsell Downsell flag : 
+churn_up_downsell_df=US_Bookings_Apr2016_Mar2017_churn[['End_Customer_ID','churn_up_downsell']].drop_duplicates()
+
+df_merged_churn_flag=df_merged_churn_flag.merge(churn_up_downsell_df,on='End_Customer_ID',how='left')
+df_merged_churn_flag
+
+
+# In[31]:
+
+
+df_booking_gap['End_Customer_ID'].dtype
+
+
+# ## Explore the renewals data for feature creation :
+
+# In[32]:
+
+
+df_renewals_full=pd.read_csv("renewals_data_raw.csv")
+df_renewals_full.reset_index(drop = True)
+
+
+# In[33]:
+
+
+#Offsetting the renewals_data
+renewals_data = df_renewals_full.sort_values(by = ['End_Customer_ID', 'Product_Code', "Renewal_Amount_USD"], ascending = [True, True, False])
+renewals_data.reset_index(drop = True)
+
+idx = [True]
+
+for i in range(1, len(renewals_data)):
+    
+    # IF 1: Check if the 2 IDs are matching (Customer ID and Product ID)
+    if (renewals_data['End_Customer_ID'].iloc[i-1] == renewals_data["End_Customer_ID"].iloc[i]) & (renewals_data['Product_Code'].iloc[i-1] == renewals_data['Product_Code'].iloc[i]):
+        
+        # IF 2: Check if previous amount == -(current amount). ie., 191 == -(-191)?
+            # If yes, pop the previous one, and mark both the previous one & the current one as False
+        if renewals_data["Renewal_Amount_USD"].iloc[i-1] == -(renewals_data["Renewal_Amount_USD"].iloc[i]):
+            idx.pop()
+            idx.append(False)
+            idx.append(False)
+            
+        # If the previous amount != -(current amount), then mark the current one as True
+        else:
+            idx.append(True)
+            
+    # If the 2 IDs are NOT matching, then retain those rows
+    else:
+        idx.append(True)
+        
+renewals_data=renewals_data[idx].reset_index(drop = True)
+
+#Filtering for US Bookings Only
+US_renewals_data= renewals_data[renewals_data['End_Customer_Country']=="US"]
+
+#Removing all negative "Amount" values
+US_renewals_data= US_renewals_data[US_renewals_data['Renewal_Amount_USD'] > 0]
+
+
+# In[34]:
+
+
+df_renewals_2016_17=US_renewals_data[(US_renewals_data['Date'] >= '2016-04-01') & (US_renewals_data['Date'] <= '2017-03-01')]
+
+print(len(renewals_data))
+print(len(df_renewals_2016_17))
+
+
+# In[35]:
+
+
+#Checking for null values
+df_renewals_2016_17.isnull().sum()
+
+
+# In[36]:
+
+
+df_renewals_2016_17_filtd = df_renewals_2016_17[df_renewals_2016_17['End_Customer_ID'].notna()]
+len(df_renewals_2016_17_filtd)
+
+
+# In[37]:
+
+
+#Creating a data dictionary to re-map the values in Data_Sub_SRC_Code:  
+
+## Subscription as a separate 
+Dict1 = {"ORDER MANAGEMENT":"Order Management", 'INVOICE' : 'Others', 'MANUAL_UPLOAD-SERVICES' : 'Others', 'MANUAL_UPLOAD-VRSN_SSL' : 'Others', "SELLIN-AR":"Selling", "SELLIN-CM":"Selling","SELLIN-PA":"Selling", "SELLIN-VRSN AR":"Selling", "SERVICE CONTRACT":"Service Contract", "SERVICE CONTRACT CLOUD": "Service Contract", "SUBSCRIPTION":"Service Contract"}
+Dict2 = {"ORDER MANAGEMENT":"Order Management", 'INVOICE' : 'Others', 'MANUAL_UPLOAD-SERVICES' : 'Others', 'MANUAL_UPLOAD-VRSN_SSL' : 'Others', "SELLIN-AR":"Selling", "SELLIN-CM":"Selling","SELLIN-PA":"Selling", "SELLIN-VRSN AR":"Selling", "SERVICE CONTRACT":"Service Contract", "SERVICE CONTRACT CLOUD": "Service Contract", "SUBSCRIPTION":"Subscription"}
+#Remapping the values of the dataframe
+df_renewals_2016_17_filtd['Sub_SRC_Categ1'] = df_renewals_2016_17_filtd['Data_Sub_SRC_Code'].map(Dict1)
+df_renewals_2016_17_filtd['Sub_SRC_Categ2'] = df_renewals_2016_17_filtd['Data_Sub_SRC_Code'].map(Dict2)
+
+
+
+print(df_renewals_2016_17_filtd['Sub_SRC_Categ1'].value_counts())
+print(df_renewals_2016_17_filtd['Sub_SRC_Categ2'].value_counts())
+
+
+# In[38]:
+
+
+##First covnert the 'End_Customer_ID' of renewals data to object type:
+df_renewals_2016_17_filtd['End_Customer_ID']=df_renewals_2016_17_filtd['End_Customer_ID'].astype('str')
+
+
+print("Total number of observations in renewal data for 2016-17:",len(df_renewals_2016_17_filtd))
+
+print("Total unique customers in renewal data for 2016-17:", df_renewals_2016_17_filtd['End_Customer_ID'].nunique())
+
+print("Total unique customers in Bookings data for 2016-17:",df_merged_churn_flag['End_Customer_ID'].nunique())
+
+cust_list_renewals=df_renewals_2016_17_filtd['End_Customer_ID'].tolist()
+cust_list_booking=df_merged_churn_flag['End_Customer_ID'].tolist()
+cust_list_intersection=list(set(cust_list_renewals) & set(cust_list_booking))
+
+
+
+df_renewals_2016_17_filtd_2=df_renewals_2016_17_filtd[df_renewals_2016_17_filtd['End_Customer_ID'].isin(cust_list_intersection)]
+
+print("Total number of observations in renewals data having same customer id as bookings data (2016-17):", len(df_renewals_2016_17_filtd_2))
+
+print("Total number of unique customers in merged bookings and renewals data (2016-17):", df_renewals_2016_17_filtd_2['End_Customer_ID'].nunique())
+
+
+
+
+# In[39]:
+
+
+## Merge churn flag with the Renewals data
+df_churn_flag=df_merged_churn_flag[['End_Customer_ID','Churn Flag']].drop_duplicates()
+df_renewals_2016_17_filtd_3=df_renewals_2016_17_filtd_2.merge(df_churn_flag,on='End_Customer_ID',how='left')
+
+df_renewals_2016_17_filtd_3['Churn Flag'].value_counts()
+
+
+# In[40]:
+
+
+len(df_renewals_2016_17_filtd_3)
+
+
+# ## Churn rate analysis w.r.t Sub_SRC_Categ1 and Sub_SRC_Categ2 : 
+
+# In[41]:
+
+
+##Churn rate analysis w.r.t Sub_SRC_Categ1: 
+
+df_churnrate_Sub_SRC_Categ1=df_renewals_2016_17_filtd_3[['Sub_SRC_Categ1','Churn Flag','End_Customer_ID']].groupby('Sub_SRC_Categ1').agg({'End_Customer_ID':'count','Churn Flag':'sum'})
+
+df_churnrate_Sub_SRC_Categ1.rename(columns = {'End_Customer_ID':'Count' , 'Churn Flag':'Total Churn'}, inplace = True)
+
+df_churnrate_Sub_SRC_Categ1['churn_rate'] = (df_churnrate_Sub_SRC_Categ1['Total Churn'] / df_churnrate_Sub_SRC_Categ1['Count'] * 100.0)
+
+df_churnrate_Sub_SRC_Categ12=df_churnrate_Sub_SRC_Categ1.sort_values('churn_rate',ascending=False).reset_index().copy()
+
+
+
+display(df_churnrate_Sub_SRC_Categ12.describe())
+
+df_churnrate_Sub_SRC_Categ1['churn_rate'].hist()
+
+df_churnrate_Sub_SRC_Categ12['Sub_SRC_Categ1_churn_level']=df_churnrate_Sub_SRC_Categ12['churn_rate'].apply(lambda x: "low" if x < 40 else ("Medium" if x <60 else "High"))
+
+
+
+fig = plt.figure(figsize = (15, 10))
+ 
+# creating the bar plot
+plt.bar(df_churnrate_Sub_SRC_Categ12['Sub_SRC_Categ1'], df_churnrate_Sub_SRC_Categ12['churn_rate'], color ='maroon',width = 0.4)
+
+plt.xlabel("Sub_SRC_Categ1")
+plt.ylabel("Churn Rate in 2016-17")
+plt.title("Churn Rate analysis w.r.t Sub_SRC_Categ1")
+plt.show()
+
+print(df_churnrate_Sub_SRC_Categ12['Sub_SRC_Categ1_churn_level'].value_counts())
+
+display(df_churnrate_Sub_SRC_Categ12.head(10))
+
+
+                                                                                                
+
+
+# In[42]:
+
+
+##Churn rate analysis w.r.t Sub_SRC_Categ2: 
+
+df_churnrate_Sub_SRC_Categ2=df_renewals_2016_17_filtd_3[['Sub_SRC_Categ2','Churn Flag','End_Customer_ID']].groupby('Sub_SRC_Categ2').agg({'End_Customer_ID':'count','Churn Flag':'sum'})
+
+df_churnrate_Sub_SRC_Categ2.rename(columns = {'End_Customer_ID':'Count' , 'Churn Flag':'Total Churn'}, inplace = True)
+
+df_churnrate_Sub_SRC_Categ2['churn_rate'] = (df_churnrate_Sub_SRC_Categ2['Total Churn'] / df_churnrate_Sub_SRC_Categ2['Count'] * 100.0)
+
+df_churnrate_Sub_SRC_Categ22=df_churnrate_Sub_SRC_Categ2.sort_values('churn_rate',ascending=False).reset_index().copy()
+
+
+
+display(df_churnrate_Sub_SRC_Categ22.describe())
+
+df_churnrate_Sub_SRC_Categ2['churn_rate'].hist()
+
+df_churnrate_Sub_SRC_Categ22['Sub_SRC_Categ2_churn_level']=df_churnrate_Sub_SRC_Categ22['churn_rate'].apply(lambda x: "low" if x < 40 else ("Medium" if x <60 else "High"))
+
+
+
+fig = plt.figure(figsize = (15, 10))
+ 
+# creating the bar plot
+plt.bar(df_churnrate_Sub_SRC_Categ22['Sub_SRC_Categ2'], df_churnrate_Sub_SRC_Categ22['churn_rate'], color ='maroon',width = 0.4)
+
+plt.xlabel("Sub_SRC_Categ2")
+plt.ylabel("Churn Rate in 2016-17")
+plt.title("Churn Rate analysis w.r.t Sub_SRC_Categ2")
+plt.show()
+
+print(df_churnrate_Sub_SRC_Categ22['Sub_SRC_Categ2_churn_level'].value_counts())
+
+display(df_churnrate_Sub_SRC_Categ22.head(10))
+
+
+                                                                                                 
+
+
+# #### Since subscription has a very different churn rate than service we will consider "Sub_SRC_Categ2" as the new category now and will keep subscription different. 
+
+# In[ ]:
+
+
+
+
+
+# In[43]:
+
+
+len(renewals_data)
+
+
+# In[44]:
+
+
+df_renewals_2016_17_filtd_3['Sub_SRC_Categ2'].value_counts(normalize=True)
+
+
+# ### Churn rate analysis w.r.t to the Sub_SRC_Categ2 for the customers with more than 1 booking: 
+
+# In[45]:
+
+
+df_booked_grtthan_1= df_merged_churn_flag[df_merged_churn_flag['Total_Bookings']>1]
+
+len(df_booked_grtthan_1)
+
+## Merge churn flag with the Renewals data
+df_churn_flag_grtthan_1=df_booked_grtthan_1[['End_Customer_ID','Churn Flag']].drop_duplicates()
+df_renewals_2016_17_filtd_3_grtthan_1=df_renewals_2016_17_filtd_2.merge(df_churn_flag_grtthan_1,on='End_Customer_ID',how='left')
+
+df_renewals_2016_17_filtd_3_grtthan_1['Churn Flag'].value_counts(normalize=True)
+
+
+##Churn rate analysis w.r.t Sub_SRC_Categ2: 
+
+df_churnrate_Sub_SRC_Categ2=df_renewals_2016_17_filtd_3_grtthan_1[['Sub_SRC_Categ2','Churn Flag','End_Customer_ID']].groupby('Sub_SRC_Categ2').agg({'End_Customer_ID':'count','Churn Flag':'sum'})
+
+df_churnrate_Sub_SRC_Categ2.rename(columns = {'End_Customer_ID':'Count' , 'Churn Flag':'Total Churn'}, inplace = True)
+
+df_churnrate_Sub_SRC_Categ2['churn_rate'] = (df_churnrate_Sub_SRC_Categ2['Total Churn'] / df_churnrate_Sub_SRC_Categ2['Count'] * 100.0)
+
+df_churnrate_Sub_SRC_Categ22=df_churnrate_Sub_SRC_Categ2.sort_values('churn_rate',ascending=False).reset_index().copy()
+
+
+
+display(df_churnrate_Sub_SRC_Categ22.describe())
+
+df_churnrate_Sub_SRC_Categ2['churn_rate'].hist()
+
+df_churnrate_Sub_SRC_Categ22['Sub_SRC_Categ2_churn_level']=df_churnrate_Sub_SRC_Categ22['churn_rate'].apply(lambda x: "low" if x < 40 else ("Medium" if x <60 else "High"))
+
+
+
+fig = plt.figure(figsize = (15, 10))
+ 
+# creating the bar plot
+plt.bar(df_churnrate_Sub_SRC_Categ22['Sub_SRC_Categ2'], df_churnrate_Sub_SRC_Categ22['churn_rate'], color ='maroon',width = 0.4)
+
+plt.xlabel("Sub_SRC_Categ2")
+plt.ylabel("Churn Rate in 2016-17")
+plt.title("Churn Rate analysis w.r.t Sub_SRC_Categ2")
+plt.show()
+
+print(df_churnrate_Sub_SRC_Categ22['Sub_SRC_Categ2_churn_level'].value_counts())
+
+display(df_churnrate_Sub_SRC_Categ22.head(10))
+
+
+# In[ ]:
+
+
+
+
+
+# ## Process renewals data : 
+
+# In[46]:
+
+
+## Calculate %age of USD amount for each customer against the dollar value spent of different services: 
+
+pivot_Sub_SRC_amt= pd.crosstab(df_renewals_2016_17_filtd_3.End_Customer_ID, df_renewals_2016_17_filtd_3.Sub_SRC_Categ2, values=df_renewals_2016_17_filtd_3.Renewal_Amount_USD, aggfunc=np.sum, normalize='index')
+
+pivot_Sub_SRC_amt=pivot_Sub_SRC_amt.reset_index()
+
+pivot_Sub_SRC_amt.columns=['End_Customer_ID','Order_Mgt_Amt_pctg','Others_Amt_pctg','Selling_Amt_pctg','Service_Amt_pctg','Subscription_Amt_pctg']
+
+pivot_Sub_SRC_amt
+
+
+# In[47]:
+
+
+## Calculate %age of order counts for each customer against the order placed for different services: 
+
+pivot_Sub_SRC_count= pd.crosstab(df_renewals_2016_17_filtd_3.End_Customer_ID, df_renewals_2016_17_filtd_3.Sub_SRC_Categ2, values=df_renewals_2016_17_filtd_3.Renewal_Amount_USD, aggfunc='count', normalize='index')
+
+pivot_Sub_SRC_count=pivot_Sub_SRC_count.reset_index()
+
+pivot_Sub_SRC_count.columns=['End_Customer_ID','Order_Mgt_cnt_pctg','Others_cnt_pctg','Selling_cnt_pctg','Service_cnt_pctg','Subscription_cnt_pctg']
+
+pivot_Sub_SRC_count
+
+
+# In[ ]:
+
+
+
+
+
+# ### Identify customer wise max amount and max count SRC Groups and also identify unique counts of SRC Categories per customer  :
+
+# In[48]:
+
+
+
+## *********************Create the US amt pivot **************************: 
+src_amt_pivot=df_renewals_2016_17_filtd_3.pivot_table(index = ['End_Customer_ID'],                                         columns=['Sub_SRC_Categ2'], values=['Renewal_Amount_USD'],                                        aggfunc=np.sum, dropna = True)
+src_amt_pivot.columns=src_amt_pivot.columns.droplevel(0)
+src_amt_pivot['Max_SRC_Amt']=src_amt_pivot.idxmax(axis=1)
+src_amt_pivot=src_amt_pivot.reset_index()
+src_amt_pivot2=src_amt_pivot[['End_Customer_ID','Max_SRC_Amt']].copy()
+
+display(src_amt_pivot2.head())
+
+## **********************Create the max count pivot ***********************#######: 
+src_count_pivot=df_renewals_2016_17_filtd_3.pivot_table(index = ['End_Customer_ID'],                                         columns=['Sub_SRC_Categ2'], values=['Renewal_Amount_USD'],                                        aggfunc='count', dropna = True)
+src_count_pivot.columns=src_count_pivot.columns.droplevel(0)
+src_count_pivot['Max_SRC_count']=src_count_pivot.idxmax(axis=1)
+
+src_count_pivot=src_count_pivot.reset_index()
+src_count_pivot2=src_count_pivot[['End_Customer_ID','Max_SRC_count']].copy()
+display(src_count_pivot2.head())
+
+
+##******************* Create customer level different SRC Categs **********######: 
+src_unique_categ_count= df_renewals_2016_17_filtd_3.groupby('End_Customer_ID').agg({'Sub_SRC_Categ2':'nunique'}).rename(columns={'Sub_SRC_Categ2':'Unique_SRC_Count'}).reset_index()
+
+display(src_unique_categ_count.head())
+
+
+# In[ ]:
+
+
+
+
+
+# In[49]:
+
+
+#Merge the above data with the booking data at customer level :
+
+df_modelling__merge_1 = df_merged_churn_flag.merge(pivot_Sub_SRC_amt,on='End_Customer_ID',how='left')
+df_modelling__merge_2 = df_modelling__merge_1.merge(pivot_Sub_SRC_count,on='End_Customer_ID',how='left')
+df_modelling__merge_3= df_modelling__merge_2.merge(src_amt_pivot2,on='End_Customer_ID',how='left')
+df_modelling__merge_4= df_modelling__merge_3.merge(src_count_pivot2,on='End_Customer_ID',how='left')
+df_modelling__merge_5= df_modelling__merge_4.merge(src_unique_categ_count,on='End_Customer_ID',how='left')
+
+display(df_modelling__merge_5)
+
+df_modelling_2=df_modelling__merge_5.copy()
+
+
+# In[50]:
+
+
+print("Distirbution of SRC Categs w.r.t USD amount :")
+print(df_modelling__merge_5['Max_SRC_Amt'].value_counts(normalize=True))
+print("\n")
+print("Distirbution of SRC Categs w.r.t total Count :")
+print(df_modelling__merge_5['Max_SRC_count'].value_counts(normalize=True))
+print("\n")
+print("Distirbution of SRC Categs w.r.t Unique counts per customer :")
+print(df_modelling__merge_5['Unique_SRC_Count'].value_counts(normalize=True))
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# In[51]:
+
+
+# Select columns as per the nature of the column required
+categorical_columns = ['End_Customer_ID','Customer_Size','Max_SRC_Amt','Max_SRC_count','Unique_SRC_Count']
+numerical_columns = ['Total_Amount','Total_Bookings','Average_Ticket_Size','ES_Amount','ES_Amount_Percentage','risk_prob',
+                    'Order_Mgt_Amt_pctg','Others_Amt_pctg','Selling_Amt_pctg','Service_Amt_pctg','Subscription_Amt_pctg',
+                    'Order_Mgt_cnt_pctg','Others_cnt_pctg','Selling_cnt_pctg','Service_cnt_pctg','Subscription_cnt_pctg']
+integer_columns = ['Unique_Products_Count', 'Symantec_Flag','Frequency_of_Booking','max_purchase_gap_period','Churn Flag','churn_up_downsell'] 
+
+renewal_features= ['Order_Mgt_Amt_pctg','Others_Amt_pctg','Selling_Amt_pctg','Service_Amt_pctg','Subscription_Amt_pctg',
+                    'Order_Mgt_cnt_pctg','Others_cnt_pctg','Selling_cnt_pctg','Service_cnt_pctg','Subscription_cnt_pctg']
+
+
+# In[52]:
+
+
+##Convert 'max_purchase_gap_period' from time delta to int:
+df_modelling_2['max_purchase_gap_period']=df_modelling_2['max_purchase_gap_period'].dt.days
+
+# Converting categorical columns to string data types
+for column in categorical_columns:
+    df_modelling_2[column] = df_modelling_2[column].astype(str).mask(df_modelling_2[column].isnull(), np.NaN)
+    
+    # Converting numerical columns to float data types
+for column in numerical_columns:
+    df_modelling_2[column] = df_modelling_2[column].astype(float).mask(df_modelling_2[column].isnull(), np.NaN)
+    
+    
+    # # Converting integer columns to integer data types
+for column in integer_columns:
+    df_modelling_2[column] = df_modelling_2[column].astype(int).mask(df_modelling_2[column].isnull(), np.NaN)
+
+
+# In[53]:
+
+
+df_modelling_2.describe().transpose()
+
+
+# From the distribution analysis above it is clear that we need to convert some of the variables from their numerical form 
+# to bins 
+
+# In[ ]:
+
+
+
+
+
+# In[54]:
+
+
+df_modelling_2['Total_Bookings_bin'] = np.where(
+    df_modelling_2['Total_Bookings'] == 1, 1, np.where(
+    df_modelling_2['Total_Bookings']==2 , 2, 3)) 
+
+df_modelling_2['Total_Bookings_bin'].value_counts(normalize=True)
+
+
+# In[55]:
+
+
+df_modelling_2[['Total_Bookings_bin','Churn Flag']].groupby('Total_Bookings_bin').agg({'Churn Flag':'mean'})
+
+## makes sense to use three bins for "Total_Bookings_bin"
+
+
+# In[56]:
+
+
+df_modelling_2['Frequency_of_Booking'].value_counts(normalize=True)
+
+
+# In[57]:
+
+
+df_modelling_2['Frequency_of_Booking_bin'] = np.where(
+    df_modelling_2['Frequency_of_Booking'] == 1, 1, np.where(
+    df_modelling_2['Frequency_of_Booking']==2 , 2, 3)) 
+
+df_modelling_2['Frequency_of_Booking_bin'].value_counts(normalize=True)
+
+
+# In[58]:
+
+
+df_modelling_2[['Frequency_of_Booking_bin','Churn Flag']].groupby('Frequency_of_Booking_bin').agg({'Churn Flag':'mean'})
+
+## makes sense to use three bins for "Frequency_of_Booking_bin" as the churn rates are very different 
+
+
+# ### Crosstab checks for frequency of booking: 
+
+# In[59]:
+
+
+pd.crosstab(df_modelling_2.Frequency_of_Booking_bin, df_modelling_2.Total_Bookings_bin, values=df_modelling_2['Churn Flag'], aggfunc='sum')
+
+
+# In[60]:
+
+
+pd.crosstab(df_modelling_2.Frequency_of_Booking_bin, df_modelling_2.Total_Bookings_bin, values=df_modelling_2['Churn Flag'], aggfunc='count')
+
+
+# In[61]:
+
+
+pd.crosstab(df_modelling_2.Frequency_of_Booking_bin, df_modelling_2.Total_Bookings_bin, values=df_modelling_2['Churn Flag'], aggfunc='mean')
+
+
+# In[62]:
+
+
+pd.crosstab(df_modelling_2.Frequency_of_Booking_bin, df_modelling_2.Total_Bookings_bin, values=df_modelling_2['Churn Flag'], aggfunc='count',normalize='all')
+
+
+# In[63]:
+
+
+## Binning for 'Unique_Products_Count_bin' : 
+
+df_modelling_2['Unique_Products_Count_bin'] = np.where(
+    df_modelling_2['Unique_Products_Count'] == 1, 1, np.where(
+    df_modelling_2['Unique_Products_Count']==2 , 2, 3)) 
+
+df_modelling_2[['Unique_Products_Count_bin','Churn Flag']].groupby('Unique_Products_Count_bin').agg({'Churn Flag':'mean'})
+
+## Use WoE for these variables 
+
+
+# In[64]:
+
+
+## Manually bin the purchase gap variable :
+
+display(df_booking_gap['max_purchase_gap_period'].describe([.1,.2,.5,.6,.7,.75,.8,.85,.9,.95,.97,.99]))
+##analyse churn rate for 0 days and then 0 , 0 to 30 , 30 to 90 and above 90 (4 buckets)
+
+df_modelling_2['purchase_gap_bin'] = np.where(
+    df_modelling_2['max_purchase_gap_period'] <= 0, 1, np.where(
+    df_modelling_2['max_purchase_gap_period']<=30 , 2, np.where(
+    df_modelling_2['max_purchase_gap_period']<=90, 3 ,4))) 
+
+# df_modelling_2['purchase_gap_bin'].value_counts(normalize=True)
+
+#churn rate analysis :
+df_modelling_2[['purchase_gap_bin','Churn Flag']].groupby('purchase_gap_bin').agg({'Churn Flag':'mean'})
+
+
+# In[ ]:
+
+
+
+
+
+# In[65]:
+
+
+# Calculation of IV values for the manually binned variables: 
+
+manual_binned_var_list=['Total_Bookings_bin','Frequency_of_Booking_bin','Unique_Products_Count_bin','Customer_Size','Symantec_Flag','Max_SRC_Amt','purchase_gap_bin']
+
+df_iv_manually_binned_summary=pd.DataFrame()
+df_iv_summary=pd.DataFrame()
+
+
+def iv_calc_manual_binned_vars(manually_binned_var_name):
+    df_woe=pd.DataFrame()
+
+
+    df_woE=df_modelling_2[[manually_binned_var_name,'Churn Flag']].groupby(manually_binned_var_name)['Churn Flag'].    agg(Total_Count='count', Event_Count='sum').reset_index()
+
+    df_woE['Event_pctg']=df_woE['Event_Count']/df_woE['Total_Count']
+
+    df_woE['Non_Event_pctg']=1-df_woE['Event_pctg']
+
+    df_woE['WoE'] = np.log(df_woE['Event_pctg']/df_woE['Non_Event_pctg'])
+
+    df_woE['IV'] = df_woE['WoE'] * (df_woE['Event_pctg'] - df_woE['Non_Event_pctg'])
+
+    final_iv= sum(df_woE['IV'])
+    
+    return final_iv
+
+
+for i in (manual_binned_var_list):
+
+    IV_value=iv_calc_manual_binned_vars(i)
+    df_iv_summary=pd.DataFrame()
+    print ("The IV Value for variable : ", i , IV_value)
+    temp =pd.DataFrame({"Variable" : [i], "IV" : [IV_value]}, columns = ["Variable", "IV"])
+    df_iv_manually_binned_summary=df_iv_manually_binned_summary.append(temp)
+
+
+
+df_iv_manually_binned_summary['Category']="Manually_Binned"
+df_iv_manually_binned_summary
+
+
+# In[66]:
+
+
+# WoE Transformation and IV calculation for autobinned variables: 
+
+import pandas.core.algorithms as algos
+from pandas import Series
+import scipy.stats.stats as stats
+import re
+import traceback
+import string
+
+df_iv_auto_binned_summary=pd.DataFrame()
+
+Numeric_vars= ['Total_Amount','Average_Ticket_Size','ES_Amount','ES_Amount_Percentage','risk_prob',
+                    'Order_Mgt_Amt_pctg','Others_Amt_pctg','Selling_Amt_pctg','Service_Amt_pctg','Subscription_Amt_pctg',
+                    'Order_Mgt_cnt_pctg','Others_cnt_pctg','Selling_cnt_pctg','Service_cnt_pctg','Subscription_cnt_pctg',
+                    'max_purchase_gap_period'] 
+
+
+# define a binning function
+def iv_woe(data, target, bins=5, show_woe=False):
+    
+    #Empty Dataframe
+    newDF,woeDF = pd.DataFrame(), pd.DataFrame()
+    
+    #Extract Column Names
+    cols = Numeric_vars
+   
+    
+    #Run WOE and IV on all the independent variables
+    for ivars in cols:
+        if (data[ivars].dtype.kind in 'bifc') and (len(np.unique(data[ivars]))>5):
+            binned_x = pd.qcut(data[ivars], bins,  duplicates='drop')
+#             binned_x = data.groupby('Industry_Class')[ivars].transform(lambda x : pd.qcut(x, bins, duplicates='drop',labels=None))
+
+            d0 = pd.DataFrame({'x': binned_x, 'y': data[target]})
+        else:
+            d0 = pd.DataFrame({'x': data[ivars], 'y': data[target]})
+        d = d0.groupby("x", as_index=False).agg({"y": ["count", "sum"]})
+        d.columns = ['Cutoff', 'N', 'Events']
+        d['% of Events'] = np.maximum(d['Events'], 0.5) / d['Events'].sum()
+        d['Non-Events'] = d['N'] - d['Events']
+        d['% of Non-Events'] = np.maximum(d['Non-Events'], 0.5) / d['Non-Events'].sum()
+        d['WoE'] = np.log(d['% of Events']/d['% of Non-Events'])
+        d['IV'] = d['WoE'] * (d['% of Events'] - d['% of Non-Events'])
+        d.insert(loc=0, column='Variable', value=ivars)
+        print("Information value of " + ivars + " is " + str(round(d['IV'].sum(),6)))
+        temp =pd.DataFrame({"Variable" : [ivars], "IV" : [d['IV'].sum()]}, columns = ["Variable", "IV"])
+        newDF=pd.concat([newDF,temp], axis=0)
+        woeDF=pd.concat([woeDF,d], axis=0)
+
+        #Show WOE Table
+        if show_woe == True:
+            print(d)
+    return newDF, woeDF
+
+
+
+iv, woe = iv_woe(data = df_modelling_2, target = 'Churn Flag', bins=5, show_woe = False)
+
+df_iv_auto_binned_summary=iv.copy()
+df_iv_auto_binned_summary['Category'] = 'auto_binned'
+df_iv_auto_binned_summary
+
+
+# In[67]:
+
+
+##Merge IV Data frames : 
+
+IV_all_Vars_Summary = pd.concat([df_iv_manually_binned_summary,df_iv_auto_binned_summary],axis=0).sort_values(by='IV',ascending=False)
+
+## Identify variables with IV >0
+IV_all_Vars_Summary[IV_all_Vars_Summary['IV']>0]
+IV_all_Vars_Summary
+
+# Select the autobinned numeric variables and stor in a list : 
+auto_binned_WoE_vars=IV_all_Vars_Summary[(IV_all_Vars_Summary['IV']>0) &(IV_all_Vars_Summary['Category']=='auto_binned')]['Variable'].tolist()
+auto_binned_WoE_vars
+
+
+# In[68]:
+
+
+## Merge with main data : 
+
+
+manual_binned_var_list=['Total_Bookings_bin','Frequency_of_Booking_bin','Unique_Products_Count_bin','Customer_Size','Symantec_Flag','Max_SRC_Amt','purchase_gap_bin']
+
+# df_modelling_3=df_modelling_2.copy()
+
+
+def WoE_Merge_manual_binned_vars(manually_binned_var_name):
+    df_woe=pd.DataFrame()
+    df_modelling_3=pd.DataFrame()
+    
+    df_modelling_3=df_modelling_2.copy()
+
+    df_woE=df_modelling_2[[manually_binned_var_name,'Churn Flag']].groupby(manually_binned_var_name)['Churn Flag'].    agg(Total_Count='count', Event_Count='sum').reset_index()
+
+    df_woE['Event_pctg']=df_woE['Event_Count']/df_woE['Total_Count']
+
+    df_woE['Non_Event_pctg']=1-df_woE['Event_pctg']
+
+    df_woE[manually_binned_var_name + '_WoE'] = np.log(df_woE['Event_pctg']/df_woE['Non_Event_pctg'])
+    
+    df_woE_2=df_woE[[manually_binned_var_name,manually_binned_var_name + '_WoE']]
+    
+#     df_modelling_3=df_modelling_3.merge(df_woE_2,on=manually_binned_var_name,how='left')
+    
+    return df_woE_2.head()
+
+df_modelling_3=df_modelling_2.copy()
+
+for i in range(len(manual_binned_var_list)):
+    manually_binned_var_name=manual_binned_var_list[i]
+    WoE_df=WoE_Merge_manual_binned_vars(manually_binned_var_name).copy()
+    df_modelling_3=df_modelling_3.merge(WoE_df,on=manually_binned_var_name,how='left')
+
+    
+
+manual_binned_var_list_woe=['Total_Bookings_bin_WoE','Frequency_of_Booking_bin_WoE','Unique_Products_Count_bin_WoE',
+                            'Symantec_Flag_WoE','Max_SRC_Amt_WoE','Customer_Size_WoE','purchase_gap_bin_WoE']
+df_modelling_3.head()
+
+
+# In[69]:
+
+
+## merge the remaining variables :
+
+
+# In[75]:
+
+
+df_modelling_2['Total_Bookings'].value_counts(normalize=True)
+
+
+# In[ ]:
+
+
+
+
+
+# In[76]:
+
+
+# importing sweetviz
+import sweetviz as sv
+#analyzing the dataset
+EDA_report = sv.analyze(df_modelling_2)
+#display the report
+EDA_report.show_html('EDA_report.html')
+
+
+# ## VIF analysis :
+
+# In[83]:
+
+
+
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+df_vif=df_modelling_3.dropna().copy()
+
+# creating dummies for Symantec_Flag and 
+# df_vif['Customer_Size'] = df_vif['Customer_Size'].map({'Small':0, 'Medium':1,'Large':2})
+
+all_vars= auto_binned_WoE_vars + manual_binned_var_list_woe 
+
+dep_vars=['Churn Flag','churn_up_downsell']
+
+final_vars=list(set(all_vars)-set(renewal_features)-set(dep_vars)- set(['ES_Amount']))
+
+
+# the independent variables set
+X = df_vif[final_vars]
+  
+# VIF dataframe
+vif_data = pd.DataFrame()
+vif_data["feature"] = X.columns
+  
+# calculating VIF for each feature
+vif_data["VIF"] = [variance_inflation_factor(X.values, i)
+                          for i in range(len(X.columns))]
+  
+display(vif_data)
+
+final_vars=vif_data[vif_data['VIF']<10]['feature'].tolist()
+final_vars
+
+
+# In[82]:
+
+
+plot a corelation graphb and pick the ES_Amount_Percentage varibale only 
+
+
+# In[ ]:
+
+
+##Explore binning 
+
+
+# In[96]:
+
+
+df_model
+
+
+# ## Model development : 
+
+# In[104]:
+
+
+##Splitting the data set into training vs testing first : 
+import sklearn.model_selection as model_selection
+
+df_model=df_modelling_3.dropna().copy()
+
+final_vars_cust_id=final_vars+['End_Customer_ID']
+
+X= df_model[final_vars_cust_id].copy()
+y= df_model['Churn Flag'].copy()
+
+
+X_train_cust, X_test_cust, y_train, y_test = model_selection.train_test_split(X, y, train_size=0.70,test_size=0.30, random_state=101)
+print("Length of X_Train : %d" %len(X_train_cust))
+print("Length of X_Test : %d" %len(X_test_cust))
+print("\t")
+print("Total churn in Development data:", y_train.sum())
+print("Total churn in Testing data: ", y_test.sum())
+print("\t")
+print("Churn Rate in Development data: %f" %(y_train.sum()*100/len(y_train)))
+print("Churn Rate in Testing data: %f" %(y_test.sum()*100/len(y_test)))
+
+
+# In[105]:
+
+
+X_test_cust
+
+
+# In[106]:
+
+
+# standardize the dataset: 
+
+from sklearn.preprocessing import StandardScaler
+X_train=X_train_cust[final_vars].copy()
+X_test=X_test_cust[final_vars].copy()
+# define standard scaler
+scaler = StandardScaler()
+# transform data
+scaled_X_train_array = scaler.fit_transform(X_train)
+scaled_X_test_array = scaler.fit_transform(X_test)
+
+#Convert to pandas dataframes: 
+scaled_X_train_df=pd.DataFrame(scaled_X_train_array, index=X_train.index, columns=X_train.columns)
+scaled_X_test_df=pd.DataFrame(scaled_X_test_array, index=X_test.index, columns=X_test.columns)
+scaled_X_train_df.head()
+
+
+# ### First cut logistic regression: 
+
+# In[129]:
+
+
+## Building the final Model with raw variables: 
+
+final_features_dt=list(final_vars)
+
+
+
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score ,recall_score
+from sklearn.metrics import roc_auc_score ,roc_curve, auc
+
+from numpy import loadtxt
+from xgboost import XGBClassifier
+from sklearn.metrics import classification_report
+from sklearn.metrics import confusion_matrix,precision_score
+from sklearn.naive_bayes import GaussianNB
+from sklearn.svm import SVC
+svclassifier = SVC(kernel='linear')
+
+def model_build(X_train,X_test):
+
+    def display_summary(true,pred):
+        tn, fp, fn, tp = confusion_matrix(true,pred).ravel()
+        print('confusion matrix')
+        print(np.array([[tp,fp],[fn,tn]]))
+        print('sensitivity is %f',1.*tp/(tp+fn))
+        print('specificity is %f',1.*tn/(tn+fp))
+        print('accuracy is %f',1.*(tp+tn)/(tp+tn+fp+fn))
+        print('balanced accuracy is %',1./2*(1.*tp/(tp+fn)+1.*tn/(tn+fp)))
+
+
+
+
+    ##CHECK CLASS PROPORTIONS IN THE DATA
+    s=y_train.value_counts()
+    m1=1- s[1]/(s[0]+s[1])
+    m2=s[1]/(s[0]+s[1])
+
+
+#     model_tree = LogisticRegression(solver='liblinear',class_weight="balanced",max_iter=20000,C=1000,penalty='l2')
+    
+    model_tree = LogisticRegression(solver='liblinear',max_iter=2000,C=1000,penalty='l2',class_weight={0:m2,1:m1})
+#     model_tree = RandomForestClassifier(random_state=0,oob_score = True, n_jobs =-1,\
+#                                         class_weight="balanced",bootstrap=True,criterion='gini',\
+#                                         max_features='auto')
+
+    model_tree.fit(X_train[final_features_dt],y_train)
+
+    ypred_train_dt = model_tree.predict(X_train[final_features_dt])
+    ypred_test_dt = model_tree.predict(X_test[final_features_dt])
+    
+    ypred_train_proba = model_tree.predict_proba(X_train[final_features_dt])[:, 1]
+    ypred_test_proba = model_tree.predict_proba(X_test[final_features_dt])[:, 1]
+
+    Accu_Score_training =accuracy_score(y_train,ypred_train_dt)
+    Accu_Score_testing =accuracy_score(y_test,ypred_test_dt)
+
+    prec_score_training=precision_score(y_train,ypred_train_dt)
+    prec_score_testing=precision_score(y_test,ypred_test_dt)
+
+    rec_score_training=recall_score(y_train,ypred_train_dt)
+    rec_score_testing=recall_score(y_test,ypred_test_dt)
+
+    auc_training = roc_auc_score(y_train,ypred_train_dt)
+    gini_training = (2*auc_training -1)
+
+    auc_testing = roc_auc_score(y_test,ypred_test_dt)
+    gini_testing = (2*auc_testing -1)
+
+
+
+    Actual_test_bad_rate=y_test.sum()/y_test.count()
+    predicted_test_bad_rate =ypred_test_dt.sum()/len(ypred_test_dt)
+
+    print("Accuracy_Score_Training : %f"  %Accu_Score_training)
+    print("Precision_Score_Training: %f"  %prec_score_training)
+    print("Recall_Score_Training: %f"  %rec_score_training)
+    print("gini_Score_Training : %f"  %gini_training)
+
+    print("\t")
+
+    print("Accuracy_Score_Testing : %f"  %Accu_Score_testing)
+    print("Precision_Score_Tsting : %f"  %prec_score_testing)
+    print("Recall_Score_Testing : %f"  %rec_score_testing)
+    print("gini_Score_Testing : %f"  %gini_testing)
+
+
+    print("\t")
+
+    print("Percentage gini_Score_Training vs testing : %f"  %((gini_training-gini_testing)*100/gini_training))
+
+    print("\t")
+
+    print("Model stability on the testing data set : %f" %((predicted_test_bad_rate/Actual_test_bad_rate)-1))
+    print("\t")
+
+
+
+    print("Classification  Report trainign data set : ")
+    print(classification_report(y_train, ypred_train_dt,labels=[0, 1]))
+    print("\t")
+
+    print("Classification  Report testing data set : ")
+    print(classification_report(y_test, ypred_test_dt,labels=[0, 1]))
+
+
+    print("Display Summary testing data set : ")
+
+    display_summary(y_test, ypred_test_dt)
+
+
+    cmtx = pd.DataFrame(
+        confusion_matrix(y_test, ypred_test_dt, labels=[0, 1]), 
+        index=['true:0', 'true:1'], 
+        columns=['pred:0', 'pred:1'])
+
+    print(cmtx)
+    
+#     predicted_pd_train=pd.concat([X_train_cust['End_Customer_ID'],pd.Series(ypred_train_proba)],axis=1)
+#     predicted_pd_test=pd.concat([X_test_cust['End_Customer_ID'],pd.Series(ypred_test_proba)],axis=1)
+
+    predicted_pd_train=pd.Series(ypred_train_proba)
+    predicted_pd_test=pd.Series(ypred_test_proba)
+    
+    return predicted_pd_train,predicted_pd_test
+  
+
+
+# In[130]:
+
+
+predicted_pd_train,predicted_pd_test=model_build(scaled_X_train_df,scaled_X_test_df)
+
+
+# In[132]:
+
+
+predicted_pd_train.to_csv("C:\\Users\\kghatak003\\Desktop\\Work\\L2Cash_POC\\POC Development\\predicted_pd_train.csv")
+
+
+# In[133]:
+
+
+predicted_pd_test.to_csv("C:\\Users\\kghatak003\\Desktop\\Work\\L2Cash_POC\\POC Development\\predicted_pd_test.csv")
+
+
+# In[128]:
+
+
+len(X_train_cust['End_Customer_ID'])
+
+
+# In[ ]:
+
+
+7145/(3130+2050+9747)
+
+
+
+
+## Observation perido : Jan'17-Mar '17 and 
+
+
+# In[95]:
+
+
+ypred_train_dt
+
+
+# In[ ]:
+
+
+
+
